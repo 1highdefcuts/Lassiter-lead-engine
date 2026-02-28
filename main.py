@@ -436,23 +436,38 @@ def leads_to_html(run_date: str, leads: List[Dict[str, Any]]) -> str:
 async def vapi_webhook(req: Request):
     payload = await req.json()
     msg = (payload or {}).get("message") or {}
+
+    # Accept both formats
     if msg.get("type") != "tool-calls":
         return {"ok": True}
 
-    tool_calls = msg.get("toolCallList") or []
+    tool_calls = (
+        msg.get("toolCallList")
+        or msg.get("toolCalls")
+        or msg.get("tool_calls")
+        or []
+    )
+
     results = []
 
     for tc in tool_calls:
-        tool_name = tc.get("name")
-        tool_call_id = tc.get("id")
-        params = tc.get("parameters") or {}
+        # Accept multiple shapes
+        tool_name = tc.get("name") or tc.get("function", {}).get("name")
+        tool_call_id = tc.get("id") or tc.get("toolCallId") or tc.get("tool_call_id")
+        params = tc.get("parameters") or tc.get("args") or tc.get("function", {}).get("arguments") or {}
+
+        # If params is a JSON string, parse it
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except Exception:
+                params = {}
 
         try:
             if tool_name == "setLeadCriteria":
                 crit = get_criteria()
                 crit.update(params)
 
-                # lock defaults
                 crit["ownerEmail"] = crit.get("ownerEmail") or DEFAULT_OWNER_EMAIL
                 crit["niches"] = crit.get("niches") or ["hvac", "dispensary", "gym"]
                 crit["dailyQuotas"] = crit.get("dailyQuotas") or {"hvac": 10, "dispensary": 5, "gym": 5}
@@ -504,20 +519,16 @@ async def vapi_webhook(req: Request):
 
             else:
                 results.append({
-                    "name": tool_name,
+                    "name": tool_name or "UNKNOWN",
                     "toolCallId": tool_call_id,
                     "result": json.dumps({"status": "ignored", "reason": f"Unknown tool: {tool_name}"})
                 })
 
         except Exception as e:
             results.append({
-                "name": tool_name,
+                "name": tool_name or "UNKNOWN",
                 "toolCallId": tool_call_id,
                 "result": json.dumps({"status": "error", "error": str(e)})
             })
 
     return {"results": results}
-
-@app.get("/")
-def health():
-    return {"ok": True, "service": "lassiter-lead-engine"}
